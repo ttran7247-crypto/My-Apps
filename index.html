@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Solar ROI Calculator</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body {
+    font-family: Arial;
+    background:#0f172a;
+    color:#fff;
+    margin:0;
+    padding:20px;
+}
+.container { max-width:1200px; margin:auto; }
+.card {
+    background:#1e293b;
+    padding:20px;
+    border-radius:12px;
+    margin-bottom:20px;
+}
+h1 { text-align:center; }
+.grid {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:20px;
+}
+label { display:block; margin-top:10px; }
+input, select {
+    width:100%;
+    padding:8px;
+    margin-top:5px;
+}
+.kpis {
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:15px;
+}
+.kpi {
+    background:#020617;
+    padding:15px;
+    border-radius:10px;
+    text-align:center;
+}
+.kpi h2 { margin:5px 0; color:#22c55e; }
+canvas { background:#fff; border-radius:10px; }
+</style>
+</head>
+
+<body>
+<div class="container">
+
+<h1>⚡ Solar + Battery ROI App</h1>
+
+<div class="grid">
+
+<!-- INPUT -->
+<div class="card">
+<h3>Inputs</h3>
+
+<label>Solar Size (kW)</label>
+<input type="range" id="solar" min="0" max="15" step="0.1" value="13">
+<span id="solarVal">13</span>
+
+<label>Battery Size (kWh)</label>
+<select id="battery">
+<option value="0">No Battery</option>
+<option value="10">10 kWh</option>
+<option value="24" selected>24 kWh</option>
+<option value="32">32 kWh</option>
+</select>
+
+<label>Daily Usage (kWh)</label>
+<input type="number" id="usage" value="50">
+
+<label>EV Usage (kWh/day)</label>
+<input type="number" id="ev" value="18">
+
+<label>AC Usage (hrs/day)</label>
+<input type="number" id="ac" value="6">
+
+<label>EV Charging Mode</label>
+<select id="evMode">
+<option value="solar">Day (Solar Charging)</option>
+<option value="mixed">Mixed</option>
+<option value="night">Night Charging</option>
+</select>
+
+<label>Electricity Plan</label>
+<select id="plan">
+<option value="tou">Synergy TOU</option>
+<option value="flat">Flat Rate</option>
+</select>
+
+</div>
+
+<!-- RESULTS -->
+<div class="card">
+<h3>Results</h3>
+
+<div class="kpi">
+<div>Current Solar</div>
+<h2 id="currSolar">13 kW</h2>
+</div>
+
+<div class="kpis">
+<div class="kpi"><div>Annual Savings</div><h2 id="savings">$0</h2></div>
+<div class="kpi"><div>Payback</div><h2 id="payback">0 yr</h2></div>
+<div class="kpi"><div>10yr Profit</div><h2 id="profit">$0</h2></div>
+<div class="kpi"><div>ROI Rating</div><h2 id="rating">-</h2></div>
+</div>
+
+<div class="kpi">
+<div>Lost Export Value</div>
+<h2 id="lost">$0</h2>
+</div>
+
+</div>
+
+</div>
+
+<!-- COST COMPARISON -->
+<div class="card">
+<h3>Annual Electricity Cost Comparison</h3>
+<div class="kpis">
+<div class="kpi"><div>No Solar</div><h2 id="cost0">$0</h2></div>
+<div class="kpi"><div>6.6 kW</div><h2 id="cost66">$0</h2></div>
+<div class="kpi"><div>13 kW</div><h2 id="cost13">$0</h2></div>
+</div>
+</div>
+
+<!-- CHART -->
+<div class="card">
+<h3>Battery vs No Battery (10-Year Cashflow)</h3>
+<canvas id="chart"></canvas>
+</div>
+
+</div>
+
+<script>
+const solarInput = document.getElementById("solar");
+const solarVal = document.getElementById("solarVal");
+const ctx = document.getElementById("chart");
+
+let chart;
+
+solarInput.oninput = () => {
+    solarVal.innerText = solarInput.value;
+    calculate();
+};
+
+function calculate(){
+
+    const solar = parseFloat(solarInput.value);
+    const battery = parseFloat(document.getElementById("battery").value);
+    const baseUsage = parseFloat(document.getElementById("usage").value);
+    const ev = parseFloat(document.getElementById("ev").value);
+    const ac = parseFloat(document.getElementById("ac").value);
+    const evMode = document.getElementById("evMode").value;
+    const plan = document.getElementById("plan").value;
+
+    // LOAD MODEL
+    let acLoad = ac * 2.5;
+
+    let evFactor = 1;
+    if(evMode === "solar") evFactor = 0.7;
+    if(evMode === "night") evFactor = 1.2;
+
+    let dailyUsage = baseUsage + (ev * evFactor) + (acLoad * 0.7);
+    let annualUsage = dailyUsage * 365;
+
+    // TARIFFS
+    let peak = 0.54;
+    let off = 0.086;
+
+    let peakExport = 0.10;
+    let offExport = 0.02;
+
+    if(plan === "flat"){
+        peak = off = 0.30;
+        peakExport = offExport = 0.05;
+    }
+
+    // SOLAR
+    let generation = solar * 1650;
+    let selfUse = solar > 10 ? 0.85 : 0.75;
+
+    let used = Math.min(generation * selfUse, annualUsage);
+    let exportEnergy = Math.max(0, generation - used);
+
+    // EXPORT SPLIT
+    let pe = exportEnergy * 0.1;
+    let oe = exportEnergy * 0.9;
+
+    let exportIncome = pe * peakExport + oe * offExport;
+
+    // COSTS
+    let noSolarCost = annualUsage * peak;
+
+    let costNoBattery =
+        (annualUsage - used) * peak -
+        exportIncome;
+
+    // BATTERY
+    let batteryValue = 0;
+
+    if(battery > 0){
+        let shift = Math.min(battery * 0.9, dailyUsage * 0.6);
+        batteryValue = shift * 365 * (peak - off);
+    }
+
+    let costWithBattery = costNoBattery - batteryValue;
+
+    // LOST VALUE
+    let lostValue = (exportEnergy * peak) - exportIncome;
+
+    // REFERENCE
+    function calc(size){
+        let g = size * 1650;
+        let sc = size > 10 ? 0.85 : 0.75;
+
+        let u = Math.min(g * sc, annualUsage);
+        let e = Math.max(0, g - u);
+
+        let pei = e * 0.1;
+        let oei = e * 0.9;
+
+        let inc = pei * peakExport + oei * offExport;
+
+        return (annualUsage - u) * peak - inc;
+    }
+
+    let cost66 = calc(6.6);
+    let cost13 = calc(13);
+
+    // SAVINGS
+    let savings = noSolarCost - costWithBattery;
+
+    let systemCost = solar >= 13 ? 14168 : 6000;
+    if(battery === 32) systemCost = 16368;
+
+    let payback = systemCost / savings;
+
+    // CASHFLOW
+    let years=[], withBatt=[], noBatt=[];
+    let cb=-systemCost, cn=-systemCost;
+
+    for(let i=1;i<=10;i++){
+        cb += savings;
+        cn += (noSolarCost - costNoBattery);
+        years.push("Year "+i);
+        withBatt.push(cb.toFixed(0));
+        noBatt.push(cn.toFixed(0));
+    }
+
+    // UI
+    document.getElementById("currSolar").innerText = solar+" kW";
+    document.getElementById("savings").innerText = "$"+savings.toFixed(0);
+    document.getElementById("payback").innerText = payback.toFixed(1)+" yr";
+    document.getElementById("profit").innerText = "$"+withBatt[9];
+    document.getElementById("rating").innerText =
+        payback<3?"🔥 Excellent":payback<5?"✅ Very Good":"OK";
+
+    document.getElementById("cost0").innerText = "$"+noSolarCost.toFixed(0);
+    document.getElementById("cost66").innerText = "$"+cost66.toFixed(0);
+    document.getElementById("cost13").innerText = "$"+cost13.toFixed(0);
+
+    document.getElementById("lost").innerText = "$"+lostValue.toFixed(0);
+
+    // CHART
+    if(chart) chart.destroy();
+
+    chart = new Chart(ctx,{
+        type:'line',
+        data:{
+            labels:years,
+            datasets:[
+                {label:"With Battery", data:withBatt, borderColor:"#22c55e"},
+                {label:"No Battery", data:noBatt, borderColor:"#ef4444"}
+            ]
+        }
+    });
+}
+
+document.querySelectorAll("input,select").forEach(e=>{
+    e.addEventListener("input",calculate);
+});
+
+calculate();
+</script>
+
+</body>
+</html>
